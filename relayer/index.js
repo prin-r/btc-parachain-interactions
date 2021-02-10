@@ -189,5 +189,5 @@ async function checkTransaction() {
 
 ;(async () => {
   new CronJob("0 */10 * * * *", catchIncident(updateRate), null, true)
-  new CronJob("*/15 * * * * *", catchIncident(checkTransaction), null, true)
+  new CronJob("0 */3 * * * *", catchIncident(checkTransaction), null, true)
 })()

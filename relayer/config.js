@@ -7,6 +7,8 @@ const config = () => {
     PRIVATE_KEY: process.env.PRIVATE_KEY || "//Bob",
     INTERLAY_URL: process.env.INTERLAY_URL || "ws://127.0.0.1:9944",
     TX_WAIT_PERIOD: parseInt(process.env.TX_WAIT_PERIOD),
+    WS_TIMEOUT_QUERY: process.env.WS_TIMEOUT_QUERY,
+    WS_TIMEOUT_TX: process.env.WS_TIMEOUT_TX,
     API_TOKEN: process.env.API_TOKEN,
     ROUTING_KEY: process.env.ROUTING_KEY,
   }
@@ -21,6 +23,12 @@ const config = () => {
   }
   if (!config.TARGET_NETWORK) {
     throw new Error("Missing target network")
+  }
+  if (!config.WS_TIMEOUT_QUERY) {
+    throw new Error("Missing ws timeout for query")
+  }
+  if (!config.WS_TIMEOUT_TX) {
+    throw new Error("Missing ws timeout for tx")
   }
   if (!config.PRIVATE_KEY) {
     throw new Error("Missing private key")

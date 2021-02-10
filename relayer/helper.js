@@ -1,10 +1,11 @@
-const { Keyring } = require("@polkadot/api")
-const { createPolkabtcAPI, sendLoggedTx } = require("@interlay/polkabtc")
+const { ApiPromise, WsProvider, Keyring } = require("@polkadot/api")
+const { sendLoggedTx, getAPITypes, getRPCTypes } = require("@interlay/polkabtc")
 const { U8aFixed } = require("@polkadot/types")
 const Big = require("big.js")
 const config = require("./config")
 const { alert } = require("./notification")
-const isMainnet = false
+const rpc = getRPCTypes()
+const types = getAPITypes()
 const BTC_DOT = "BTC_DOT"
 const BTC_F = "BTC_F"
 const BTC_HH = "BTC_HH"
@@ -21,19 +22,46 @@ const sleep = async (t) => {
   return new Promise((r) => setTimeout(r, t))
 }
 
+const timeout = async (ms, promise, message) => {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(new Error(`TIMEOUT: ${message}`))
+    }, ms)
+
+    promise
+      .then((value) => {
+        clearTimeout(timer)
+        resolve(value)
+      })
+      .catch((reason) => {
+        clearTimeout(timer)
+        reject(reason)
+      })
+  })
+}
+
 const getAccount = () => {
   const keyring = new Keyring({ type: "sr25519" })
   return keyring.addFromUri(config.PRIVATE_KEY)
 }
 
 const getTxEventDataAtIndex = async (blockHashWithIndex) => {
+  const provider = new WsProvider(config.INTERLAY_URL)
   try {
     const [blockHashHex, indexHex] = blockHashWithIndex.split("_")
     const blockHash = U8aFixed.from(Buffer.from(blockHashHex, "hex"))
-    const polkaBTC = await createPolkabtcAPI(config.INTERLAY_URL, isMainnet)
-    const api = polkaBTC.api
+    const api = await timeout(
+      config.WS_TIMEOUT_QUERY,
+      ApiPromise.create({ provider, rpc, types }),
+      "WebSocket Timeout at getTxEventDataAtIndex create ws"
+    )
+    const events = await timeout(
+      config.WS_TIMEOUT_QUERY,
+      api.query.system.events.at(blockHash),
+      "WebSocket Timeout at getTxEventDataAtIndex query event"
+    )
+    await provider.disconnect()
 
-    const events = await api.query.system.events.at(blockHash)
     for (let {
       event: { index, data },
     } of events.toHuman()) {
@@ -41,10 +69,12 @@ const getTxEventDataAtIndex = async (blockHashWithIndex) => {
         return data
       }
     }
+
+    return null
   } catch (e) {
     alert("Fail at getTxEventDataAtIndex", e)
-    return null
   }
+  await provider.disconnect()
   return null
 }
 
@@ -65,10 +95,14 @@ const getTxHashFromEvents = (result, sender) => {
 }
 
 const sendRelayTx = async (symbols, rates, requestIds, resolvedTimes) => {
+  const provider = new WsProvider(config.INTERLAY_URL)
   try {
-    const polkaBTC = await createPolkabtcAPI(config.INTERLAY_URL, isMainnet)
+    const api = await timeout(
+      config.WS_TIMEOUT_QUERY,
+      ApiPromise.create({ provider, rpc, types }),
+      "WebSocket Timeout at sendRelayTx create api"
+    )
     const sender = getAccount()
-    polkaBTC.oracle.setAccount(sender)
     const relayData = zip([symbols, rates, requestIds, resolvedTimes])
 
     if (relayData.length === 1) {
@@ -76,16 +110,19 @@ const sendRelayTx = async (symbols, rates, requestIds, resolvedTimes) => {
       if (!btc_dot) {
         throw "BTC_DOT not found"
       }
-      return getTxHashFromEvents(
-        await sendLoggedTx(
-          polkaBTC.oracle.api.tx.exchangeRateOracle.setExchangeRate(
-            polkaBTC.oracle.api.createType("FixedU128", fromE9ToE18(btc_dot[1]))
+      const events = await timeout(
+        config.WS_TIMEOUT_TX,
+        sendLoggedTx(
+          api.tx.exchangeRateOracle.setExchangeRate(
+            api.createType("FixedU128", fromE9ToE18(btc_dot[1]))
           ),
           sender,
-          polkaBTC.oracle.api
+          api
         ),
-        sender
+        "WebSocket Timeout at sendRelayTx btc/dot"
       )
+      await provider.disconnect()
+      return getTxHashFromEvents(events, sender)
     } else if (relayData.length === 3) {
       const btc_f = relayData.find((e) => e[0] === BTC_F)
       const btc_hh = relayData.find((e) => e[0] === BTC_HH)
@@ -93,24 +130,28 @@ const sendRelayTx = async (symbols, rates, requestIds, resolvedTimes) => {
       if (!btc_f || !btc_hh || !btc_h) {
         throw `BTC_F or BTC_HH or BTC_H not found (${btc_f},${btc_hh},${btc_h})`
       }
-      return getTxHashFromEvents(
-        await sendLoggedTx(
-          polkaBTC.oracle.api.tx.exchangeRateOracle.setBtcTxFeesPerByte(
+      const events = await timeout(
+        config.WS_TIMEOUT_TX,
+        sendLoggedTx(
+          api.tx.exchangeRateOracle.setBtcTxFeesPerByte(
             Math.round(btc_f[1] / 1e9),
             Math.round(btc_hh[1] / 1e9),
             Math.round(btc_h[1] / 1e9)
           ),
           sender,
-          polkaBTC.oracle.api
+          api
         ),
-        sender
+        "WebSocket Timeout at sendRelayTx btc fees"
       )
+      await provider.disconnect()
+      return getTxHashFromEvents(events, sender)
     }
   } catch (e) {
     await alert("Exception raised", e)
     console.log(e)
-    return null
   }
+  await provider.disconnect()
+  return null
 }
 
 // Return status of transaction follow this
@@ -152,3 +193,34 @@ module.exports = {
   BTC_HH,
   BTC_H,
 }
+;(async () => {
+  let i = 0
+  const mockData = [
+    [["BTC_DOT"], ["1888222760290"], [1], ["1612779534"]],
+    [
+      ["BTC_F", "BTC_HH", "BTC_H"],
+      ["102000000000", "102000000000", "88000000000"],
+      [2, 3, 4],
+      ["1612779534", "1612779534", "1612779534"],
+    ],
+  ]
+
+  while (true) {
+    console.log("round:", i + 1)
+    try {
+      const [symbols, rates, reqIds, timestamps] = mockData[i % 2]
+      const txHash = await sendRelayTx(symbols, rates, reqIds, timestamps)
+      console.log(txHash)
+
+      const status = await transactionStatus(txHash, Date.now())
+      console.log(status)
+    } catch (e) {
+      console.log(JSON.stringify(e))
+    }
+    console.log(
+      "=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-=-="
+    )
+    await sleep(10_000)
+    i++
+  }
+})()
