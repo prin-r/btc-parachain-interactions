@@ -208,11 +208,17 @@ module.exports = {
   while (true) {
     console.log("round:", i + 1)
     try {
+      // select the data (btc/dot or btc fees)
       const [symbols, rates, reqIds, timestamps] = mockData[i % 2]
+
+      // send a tx
+      // txHash will be blockHash_txIndex
       const txHash = await sendRelayTx(symbols, rates, reqIds, timestamps)
       console.log(txHash)
 
+      // check the status of the tx by using txHash
       const status = await transactionStatus(txHash, Date.now())
+      // 0 is ok
       console.log(status)
     } catch (e) {
       console.log(JSON.stringify(e))
