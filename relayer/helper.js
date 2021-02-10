@@ -214,12 +214,12 @@ module.exports = {
       // send a tx
       // txHash will be blockHash_txIndex
       const txHash = await sendRelayTx(symbols, rates, reqIds, timestamps)
-      console.log(txHash)
+      console.log("txHash: ", txHash)
 
       // check the status of the tx by using txHash
       const status = await transactionStatus(txHash, Date.now())
       // 0 is ok
-      console.log(status)
+      console.log("status: ", status)
     } catch (e) {
       console.log(JSON.stringify(e))
     }
